@@ -1,0 +1,230 @@
+From e278c38ba042ca62b65d44f7899301ff1ed9a45e Mon Sep 17 00:00:00 2001
+From: zyuszzy <c27627709@outlook.com>
+Date: Sat, 10 Jan 2026 16:02:37 +0000
+Subject: [PATCH] HW1 Add two new system call (revstr/tempbuf)
+
+---
+ include/linux/syscalls.h          |   4 ++
+ include/uapi/asm-generic/unistd.h |   8 ++-
+ kernel/Makefile                   |   3 +-
+ kernel/revstr.c                   |  32 +++++++++
+ kernel/tempbuf.c                  | 108 ++++++++++++++++++++++++++++++
+ 5 files changed, 153 insertions(+), 2 deletions(-)
+ mode change 100644 => 100755 include/linux/syscalls.h
+ mode change 100644 => 100755 include/uapi/asm-generic/unistd.h
+ mode change 100644 => 100755 kernel/Makefile
+ create mode 100755 kernel/revstr.c
+ create mode 100755 kernel/tempbuf.c
+
+diff --git a/include/linux/syscalls.h b/include/linux/syscalls.h
+old mode 100644
+new mode 100755
+index a34b0f9a9..cdbcc94a4
+--- a/include/linux/syscalls.h
++++ b/include/linux/syscalls.h
+@@ -1269,6 +1269,10 @@ asmlinkage long sys_mmap_pgoff(unsigned long addr, unsigned long len,
+ 			unsigned long fd, unsigned long pgoff);
+ asmlinkage long sys_old_mmap(struct mmap_arg_struct __user *arg);
+ 
++/* for course*/
++asmlinkage long sys_revstr(char __user *str, size_t n);
++asmlinkage long sys_tempbuf(int mode, void __user *data, size_t size);
++
+ 
+ /*
+  * Not a real system call, but a placeholder for syscalls which are
+diff --git a/include/uapi/asm-generic/unistd.h b/include/uapi/asm-generic/unistd.h
+old mode 100644
+new mode 100755
+index 45fa180cc..7e9da4eda
+--- a/include/uapi/asm-generic/unistd.h
++++ b/include/uapi/asm-generic/unistd.h
+@@ -886,8 +886,14 @@ __SYSCALL(__NR_futex_waitv, sys_futex_waitv)
+ #define __NR_set_mempolicy_home_node 450
+ __SYSCALL(__NR_set_mempolicy_home_node, sys_set_mempolicy_home_node)
+ 
++#define __NR_revstr 451
++__SYSCALL(__NR_revstr, sys_revstr)
++
++#define __NR_tempbuf 452
++__SYSCALL(__NR_tempbuf, sys_tempbuf)
++
+ #undef __NR_syscalls
+-#define __NR_syscalls 451
++#define __NR_syscalls 453
+ 
+ /*
+  * 32 bit systems traditionally used different
+diff --git a/kernel/Makefile b/kernel/Makefile
+old mode 100644
+new mode 100755
+index d754e0be1..9d5535bb0
+--- a/kernel/Makefile
++++ b/kernel/Makefile
+@@ -10,7 +10,8 @@ obj-y     = fork.o exec_domain.o panic.o \
+ 	    extable.o params.o \
+ 	    kthread.o sys_ni.o nsproxy.o \
+ 	    notifier.o ksysfs.o cred.o reboot.o \
+-	    async.o range.o smpboot.o ucount.o regset.o
++	    async.o range.o smpboot.o ucount.o regset.o \
++      revstr.o tempbuf.o
+ 
+ obj-$(CONFIG_USERMODE_DRIVER) += usermode_driver.o
+ obj-$(CONFIG_MODULES) += kmod.o
+diff --git a/kernel/revstr.c b/kernel/revstr.c
+new file mode 100755
+index 000000000..37e12d8aa
+--- /dev/null
++++ b/kernel/revstr.c
+@@ -0,0 +1,32 @@
++#include <linux/kernel.h>
++#include <linux/syscalls.h>
++#include <linux/uaccess.h>
++
++SYSCALL_DEFINE2(revstr, char __user *, str, size_t, n)
++{
++    char kbuf[256];  // kernel space buffer
++
++    // copy string from user space to kernel space
++    if (copy_from_user(kbuf, str, n))
++        return -EFAULT;
++
++    kbuf[n] = '\0';
++    // print to kernel ring buffer
++    printk(KERN_INFO "Ori: %s\n", kbuf);
++
++    // reverse
++    for(int i=0 ; i<n/2 ; i++){
++        char tmp = kbuf[i];
++        kbuf[i] = kbuf[n - i - 1];
++        kbuf[n - i - 1] = tmp;
++    }
++
++    // print reversed string to kernel ring buffer
++    printk(KERN_INFO "Rev: %s\n", kbuf);
++
++    // copy result to user space
++    if (copy_to_user(str, kbuf, n))
++        return -EFAULT;
++
++    return 0;
++}
+\ No newline at end of file
+diff --git a/kernel/tempbuf.c b/kernel/tempbuf.c
+new file mode 100755
+index 000000000..2094c1882
+--- /dev/null
++++ b/kernel/tempbuf.c
+@@ -0,0 +1,108 @@
++#include <linux/kernel.h>
++#include <linux/syscalls.h>
++#include <linux/slab.h>
++#include <linux/list.h>
++#include <linux/uaccess.h>
++#include <linux/string.h>
++
++enum mode {
++    PRINT,
++    ADD,
++    REMOVE
++};
++
++struct temp_record{
++    char *data;
++    struct list_head list;
++};
++
++static LIST_HEAD(temp_list);
++
++SYSCALL_DEFINE3(tempbuf, int, mode, void __user *, data, size_t, size)
++{
++    struct temp_record *rec, *nextt;
++    char *kbuf;
++    int ret = 0;
++
++    if(!data || size == 0)
++        return -EFAULT;
++
++    // Allocate kernel buffer
++    kbuf = kmalloc(size + 1, GFP_KERNEL);
++    if(!kbuf)
++        return -ENOMEM;
++
++    if(copy_from_user(kbuf, data, size)){
++        kfree(kbuf);
++        return -EFAULT;
++    }
++    kbuf[size] = '\0';
++
++    switch (mode) {
++        case ADD:
++            rec = kmalloc(sizeof(*rec), GFP_KERNEL);
++            if(!rec){
++                kfree(kbuf);
++                return -ENOMEM;
++            }
++            rec->data = kbuf;
++            list_add_tail(&rec->list, &temp_list);
++            printk(KERN_INFO "[tempbuf] Added: %s\n", rec->data);
++            break;
++        case REMOVE:
++            list_for_each_entry_safe(rec, nextt, &temp_list, list) {
++                if (strcmp(rec->data, kbuf) == 0) {
++                    list_del(&rec->list);
++                    printk(KERN_INFO "[tempbuf] Removed: %s\n", rec->data);
++                    kfree(rec->data);
++                    kfree(rec);
++                    kfree(kbuf);
++                    return 0;
++                }
++            }
++            kfree(kbuf);
++            return -ENOENT; //nothing to remove
++        case PRINT: {
++            char *out;
++            size_t total_len = 0;
++            size_t used = 0;
++
++            out = kmalloc(512, GFP_KERNEL);
++            if (!out) {
++                kfree(kbuf);
++                return -ENOMEM;
++            }
++            out[0] = '\0';
++
++            list_for_each_entry(rec, &temp_list, list) {
++                size_t len = strlen(rec->data);
++                if (used + len + 1 >= 512)
++                    break;
++                if (used > 0) {
++                    strcat(out, " ");
++                    used++;
++                }
++                strcat(out, rec->data);
++                used += len;
++            }
++
++            if (copy_to_user(data, out, min(size, strlen(out) + 1))) {
++                kfree(out);
++                kfree(kbuf);
++                return -EFAULT;
++            }
++
++            printk(KERN_INFO "[tempbuf] %s\n", out);
++            ret = strlen(out);
++            kfree(out);
++            kfree(kbuf);
++            return ret;
++        }
++
++        default:
++            kfree(kbuf);
++            return -EINVAL;
++    }
++
++    return ret;
++}
+\ No newline at end of file
+-- 
+2.43.0
+
