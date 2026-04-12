@@ -1,6 +1,6 @@
 **Lab1：Kernel Compilation & System Calls**
   * Link：https://hackmd.io/Gjzi7UTZTSGs5UHJEGw-xQ
-  
+  在 RISC-V 架構下，基於 Linux Kernel v6.1 進行開發，包含環境建置、編譯kernel、跨平台模擬及新增system call。
 
 **Lab2：Scheduling Policy Demo**
   https://hackmd.io/giXqpRIiRQqs01fDMtc7jQ
