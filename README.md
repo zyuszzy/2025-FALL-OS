@@ -7,4 +7,5 @@
   * 實作一個多執行緒程式，手動控制 Linux Scheduling Policy，觀測 Fair Scheduling (CFS) 與 Real-Time (RT) scheduling之間的行為差異。
 
 **Lab3：Kfetch Kernel Module**
-  https://hackmd.io/5WKE0lgLTUap-jGYQI_ipQ
+  * https://hackmd.io/5WKE0lgLTUap-jGYQI_ipQ
+  * 實做一個 kernel module(character device driver)，user 可獲取 system information 透過 reading the device。
